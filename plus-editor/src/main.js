@@ -1,9 +1,7 @@
-document.addEventListener("DOMContentLoaded", function (event) {
-
-  let componentManager;
+document.addEventListener('DOMContentLoaded', function () {
+  let componentRelay;
   let workingNote, clientData;
   let lastValue, lastUUID;
-  let editor;
   let ignoreTextChange = false;
   let newNoteLoad = true,
     didToggleFullScreen = false;
@@ -15,34 +13,40 @@ document.addEventListener("DOMContentLoaded", function (event) {
     'li', 'main', 'nav', 'ol', 'p', 'pre', 'section', 'table', 'ul',
   ].join(', ');
 
-  function loadComponentManager() {
-    const permissions = [{
-      name: "stream-context-item"
-    }];
-    componentManager = new ComponentManager(permissions, function () {
-      // on ready
-      const platform = componentManager.platform;
-      if (platform) {
-        document.body.classList.add(platform);
+  function loadComponentRelay() {
+    const initialPermissions = [
+      {
+        name: 'stream-context-item'
+      }
+    ];
+
+    componentRelay = new ComponentRelay({
+      initialPermissions,
+      targetWindow: window,
+      onReady: () => {
+        const platform = componentRelay.platform;
+        if (platform) {
+          document.body.classList.add(platform);
+        }
       }
     });
 
-    componentManager.streamContextItem((note) => {
+    componentRelay.streamContextItem((note) => {
       onReceivedNote(note);
     });
   }
 
   function strip(html) {
-    const tmp = document.implementation.createHTMLDocument("New").body;
+    const tmp = document.implementation.createHTMLDocument('New').body;
     tmp.innerHTML = html;
-    return tmp.textContent || tmp.innerText || "";
+    return tmp.textContent || tmp.innerText || '';
   }
 
   function truncateString(string, limit = 90) {
     if (string.length <= limit) {
       return string;
     } else {
-      return string.substring(0, limit) + "...";
+      return string.substring(0, limit) + '...';
     }
   }
 
@@ -55,7 +59,7 @@ document.addEventListener("DOMContentLoaded", function (event) {
       // save incorrectly.
       const note = workingNote;
 
-      componentManager.saveItemWithPresave(note, () => {
+      componentRelay.saveItemWithPresave(note, () => {
         lastValue = $('#summernote').summernote('code');
         note.clientData = clientData;
 
@@ -94,7 +98,7 @@ document.addEventListener("DOMContentLoaded", function (event) {
       const isHtml = /<[a-z][\s\S]*>/i.test(newText);
 
       if (!didToggleFullScreen) {
-        $('#summernote').summernote('fullscreen.toggle');
+        summernote.summernote('fullscreen.toggle');
         didToggleFullScreen = true;
       }
 
@@ -102,18 +106,103 @@ document.addEventListener("DOMContentLoaded", function (event) {
         newText = textToHTML(newText);
       }
 
+      let renderNote = false;
+      const isUnsafeContent = checkIfUnsafeContent(newText);
+
+      if (isUnsafeContent) {
+        const currentNotePreferences = getCurrentNotePreferences();
+        if (!currentNotePreferences) {
+          showUnsafeContentAlert().then((result) => {
+            if (result) {
+              setNotePreferences('trustUnsafeContent', result);
+              renderNote = result;
+            }
+          });
+        } else {
+          renderNote = currentNotePreferences.trustUnsafeContent || false;
+        }
+      } else {
+        renderNote = true;
+      }
+
+      /**
+       * If the user decides not to continue rendering the note,
+       * clear the editor and disable it.
+       */
+      if (!renderNote) {
+        summernote.summernote('code', '');
+        summernote.summernote('disable');
+        return;
+      }
+
+      summernote.summernote('enable');
       summernote.summernote('code', newText);
 
       if (newNoteLoad) {
         // Clears history but keeps note contents. Note that this line will
         // trigger a summernote.change event, so be sure to do this inside a
         // `ignoreTextChange` block.
-        $('#summernote').summernote('commit');
+        summernote.summernote('commit');
         newNoteLoad = false;
       }
 
       ignoreTextChange = false;
     }
+  }
+
+  function getNotePreferences() {
+    return componentRelay.getComponentDataValueForKey('notes') || {};
+  }
+
+  function getCurrentNotePreferences() {
+    const notesPreferences = getNotePreferences();
+    return notesPreferences[lastUUID];
+  }
+
+  function setNotePreferences(key, value) {
+    const notesPreferences = getNotePreferences();
+    notesPreferences[lastUUID] = {
+      [key]: value
+    };
+    componentRelay.setComponentDataValueForKey('notes', notesPreferences);
+  }
+
+  /**
+   * Checks if the content contains at least one script tag.
+   */
+  function checkIfUnsafeContent(content) {
+    const doc = new DOMParser().parseFromString(`<body>${content}</body>`, 'text/html');
+    return Array.from(doc.body.childNodes).some(node => node.nodeName == 'SCRIPT');
+  }
+
+  function showUnsafeContentAlert() {
+    const text = 'We’ve detected that this note contains a script or code snippet which may be unsafe to execute. ' +
+                  'Scripts executed in the editor have the ability to impersonate as the editor to Standard Notes. ' +
+                  'Press Continue to mark this script as safe and proceed, or Cancel to avoid rendering this note.';
+
+    return new Promise((resolve) => {
+      const alert = new Stylekit.SKAlert({
+        title: null,
+        text,
+        buttons: [
+          {
+            text: 'Cancel',
+            style: 'neutral',
+            action: function() {
+              resolve(false);
+            },
+          },
+          {
+            text: 'Continue',
+            style: 'danger',
+            action: function() {
+              resolve(true);
+            },
+          },
+        ]
+      });
+      alert.present();
+    });
   }
 
   function loadEditor() {
@@ -142,20 +231,19 @@ document.addEventListener("DOMContentLoaded", function (event) {
       ],
       callbacks: {
         onInit: function () {},
-        onImageUpload: function (files) {
-          alert("Until we can encrypt image files, uploads are not currently "
-            + "supported. We recommend using the Image button in the toolbar "
-            + "and copying an image URL instead.");
+        onImageUpload: function () {
+          alert('Until we can encrypt image files, uploads are not currently '
+            + 'supported. We recommend using the Image button in the toolbar '
+            + 'and copying an image URL instead.');
         }
       }
     });
 
     // summernote.change
-    $('#summernote').on('summernote.change', function (we, contents, $editable) {
-
+    $('#summernote').on('summernote.change', function () {
       // Add RTL support when block-level elements are detect onchange.
       document.querySelectorAll(blockString)
-      .forEach(element => element.setAttribute('dir', 'auto'));
+        .forEach(element => element.setAttribute('dir', 'auto'));
 
       if (!ignoreTextChange) {
         save();
@@ -164,16 +252,15 @@ document.addEventListener("DOMContentLoaded", function (event) {
 
     $('textarea.note-codable').on('input', () => {
       save();
-    })
+    });
   }
 
   loadEditor();
-  loadComponentManager();
+  loadComponentRelay();
 
   function textToHTML(text) {
-    return ((text || "") + "")
-    .replace(/\t/g, "    ")
-    .replace(/\r\n|\r|\n/g, "<br />");
+    return ((text || '') + '')
+      .replace(/\t/g, '    ')
+      .replace(/\r\n|\r|\n/g, '<br />');
   }
-
 });

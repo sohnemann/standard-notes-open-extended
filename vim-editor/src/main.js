@@ -24,7 +24,7 @@ document.addEventListener("DOMContentLoaded", function () {
   let ignoreTextChange = false;
   let initialLoad = true;
 
-  function loadComponentManager() {
+  function loadComponentRelay() {
     componentRelay = new ComponentRelay({
       targetWindow: window,
       onReady: () => {
@@ -99,6 +99,10 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function loadEditor() {
+    // Handler for the save command that is mapped to the :w (write) key binding.
+    CodeMirror.commands.save = function() {
+      save();
+    };
     editor = CodeMirror.fromTextArea(document.getElementById("code"), {
       lineNumbers: true,
       styleSelectedText: true,
@@ -131,7 +135,7 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   loadEditor();
-  loadComponentManager();
+  loadComponentRelay();
 
   /*
     Editor Modes
